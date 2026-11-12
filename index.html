@@ -495,7 +495,8 @@ const state = {
   articles: ARTICLE_SEED.slice(),
   refreshing: false,
   refreshes: 0,
-  noticeUnread: true
+  noticeUnread: true,
+  lastRefreshAt: null   /* 上次刷新时间戳，用于动态显示"N分钟前" */
 };
 
 const $ = (id) => document.getElementById(id);
@@ -690,23 +691,42 @@ function nowHM(){
   return p(d.getHours()) + ':' + p(d.getMinutes());
 }
 
-function doRefresh(){
+/* 把时间戳转成"N分钟前/N小时前" */
+function formatAgo(ts){
+  if(!ts) return '';
+  const diff = Math.floor((Date.now() - ts) / 1000);
+  if(diff < 60) return '刚刚';
+  if(diff < 3600) return Math.floor(diff / 60) + ' 分钟前';
+  if(diff < 86400) return Math.floor(diff / 3600) + ' 小时前';
+  return Math.floor(diff / 86400) + ' 天前';
+}
+
+/* 更新顶部"更新于 HH:MM（N 分钟前）" */
+function tickUpdTime(){
+  if(!state.lastRefreshAt) return;
+  $('updTime').textContent = '更新于 ' + nowHM() + '（' + formatAgo(state.lastRefreshAt) + '）';
+}
+
+function doRefresh(silent){
   if(state.refreshing) return;
   state.refreshing = true;
   const btn = $('refreshBtn');
-  btn.classList.add('loading');
-  $('refreshTx').textContent = '更新中…';
+  if(!silent){
+    btn.classList.add('loading');
+    $('refreshTx').textContent = '更新中…';
+  }
 
   setTimeout(() => {
     state.refreshes++;
-    $('updTime').textContent = '更新于 ' + nowHM() + '（刚刚）';
+    state.lastRefreshAt = Date.now();
+    tickUpdTime();
     $('updNote').textContent = '已更新到最新新闻。';
 
     if(state.refreshes === 1 && !state.articles.some(a => a.id === ARTICLE_NEW.id)){
       state.articles.unshift(ARTICLE_NEW);
-      toast('已同步至最新 · 新增 1 条要闻');
+      if(!silent) toast('已同步至最新 · 新增 1 条要闻');
     }else{
-      toast('已是最新，暂无新增要闻');
+      if(!silent) toast('已是最新，暂无新增要闻');
     }
 
     btn.classList.remove('loading');
@@ -715,7 +735,29 @@ function doRefresh(){
     renderList(false);
   }, 900);
 }
-$('refreshBtn').addEventListener('click', doRefresh);
+$('refreshBtn').addEventListener('click', () => doRefresh(false));
+
+/* ========== 自动刷新：打开即刷 + 每 5 分钟 + 切回页面 ========== */
+document.addEventListener('DOMContentLoaded', () => {
+  /* 先把"更新时间"显示成启动时的时刻，然后静默刷新一次 */
+  state.lastRefreshAt = Date.now();
+  tickUpdTime();
+  setTimeout(() => doRefresh(true), 400);   /* 延迟一点让首屏先渲染完 */
+});
+
+/* 每 30 秒刷新一次相对时间显示（"刚刚"→"1 分钟前"→"2 分钟前"…） */
+setInterval(tickUpdTime, 30 * 1000);
+
+/* 每 5 分钟静默拉一次新 */
+setInterval(() => doRefresh(true), 5 * 60 * 1000);
+
+/* 用户切回页面时，如果距离上次刷新 > 2 分钟就静默刷新 */
+document.addEventListener('visibilitychange', () => {
+  if(!document.hidden && state.lastRefreshAt &&
+     (Date.now() - state.lastRefreshAt) > 2 * 60 * 1000){
+    doRefresh(true);
+  }
+});
 
 /* ===================== 下拉刷新 ===================== */
 let pullStart = 0, pulling = false, pullDist = 0, ptrBusy = false;
